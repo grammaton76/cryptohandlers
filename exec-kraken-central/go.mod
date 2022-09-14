@@ -1,8 +1,9 @@
 module kraken-central
 
-go 1.19
+go 1.18
 
 require (
+	github.com/beldur/kraken-go-api-client v0.0.0-20210512194559-2c29669c4ecc
 	github.com/grammaton76/g76golib/chatoutput/sc_dbtable v0.0.0-20220914073650-57e64448926a
 	github.com/grammaton76/g76golib/okane v0.0.0-20220914073650-57e64448926a
 	github.com/grammaton76/g76golib/sentry v0.0.0-20220914073650-57e64448926a

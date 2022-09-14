@@ -1,6 +1,8 @@
 github.com/VividCortex/mysqlerr v1.0.0 h1:5pZ2TZA+YnzPgzBfiUWGqWmKDVNBdrkf9g+DNe1Tiq8=
 github.com/VividCortex/mysqlerr v1.0.0/go.mod h1:xERx8E4tBhLvpjzdUyQiSfUxeMcATEQrflDAfXsqcAE=
 github.com/agnivade/wasmbrowsertest v0.3.1/go.mod h1:zQt6ZTdl338xxRaMW395qccVE2eQm0SjC/SDz0mPWQI=
+github.com/beldur/kraken-go-api-client v0.0.0-20210512194559-2c29669c4ecc h1:nYdDKeiMVAH4DnBv6PDoOZtxUcCFj5jRL6M4anypjTE=
+github.com/beldur/kraken-go-api-client v0.0.0-20210512194559-2c29669c4ecc/go.mod h1:NtR1i+x0BHgyscUkgG1FlAokpIxNDKgLO3301OLxWt0=
 github.com/chromedp/cdproto v0.0.0-20190614062957-d6d2f92b486d/go.mod h1:S8mB5wY3vV+vRIzf39xDXsw3XKYewW9X6rW2aEmkrSw=
 github.com/chromedp/cdproto v0.0.0-20190621002710-8cbd498dd7a0/go.mod h1:S8mB5wY3vV+vRIzf39xDXsw3XKYewW9X6rW2aEmkrSw=
 github.com/chromedp/cdproto v0.0.0-20190812224334-39ef923dcb8d/go.mod h1:0YChpVzuLJC5CPr+x3xkHN6Z8KOSXjNbL7qV8Wc4GW0=

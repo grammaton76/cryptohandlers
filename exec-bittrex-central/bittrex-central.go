@@ -10,6 +10,7 @@ import (
 	"github.com/grammaton76/g76golib/sjson"
 	"github.com/grammaton76/g76golib/slogger"
 	"github.com/shopspring/decimal"
+	bittrex "github.com/toorop/go-bittrex"
 	"strings"
 	"time"
 )
@@ -542,7 +543,7 @@ func (ba *BittrexAccount) checkOrderLoop() {
 	orders, err := ba.Handle.GetClosedOrders("all")
 	if err != nil {
 		log.Errorf("Failed to fetch closed orders for %s from bittrex; reason: '%s'\n", ba.Identifier(), err)
-		ba.User.Notices.SendIfDeff("Failed to fetch closed orders for %s from bittrex; reason: '%s'\n", ba.Identifier(), err)
+		ba.User.Notices.SendfIfDef("Failed to fetch closed orders for %s from bittrex; reason: '%s'\n", ba.Identifier(), err)
 	} else {
 		log.Printf("Scanned %d closed orders for '%s'\n", len(orders), ba.Identifier())
 		for _, o := range orders {
@@ -557,7 +558,7 @@ func (ba *BittrexAccount) checkOrderLoop() {
 				if Order != nil {
 					err = Order.RecordClosedOrder()
 					log.ErrorIff(err, "Error closing order %s", Order.Identifier())
-					ba.User.Notices.SendIfDeff("%s", Order.FormatOrderClosedChat())
+					ba.User.Notices.SendfIfDef("%s", Order.FormatOrderClosedChat())
 				}
 			}
 			//		log.Printf("Downloaded: '%+v'\n", Order)
@@ -566,7 +567,7 @@ func (ba *BittrexAccount) checkOrderLoop() {
 	orders, err = ba.Handle.GetOpenOrders("all")
 	if err != nil {
 		log.Errorf("Failed to fetch open orders for %s from bittrex; reason: '%s'\n", ba.Identifier(), err)
-		ba.User.Notices.SendIfDeff("Failed to fetch open orders for %s from bittrex; reason: '%s'\n", ba.Identifier(), err)
+		ba.User.Notices.SendfIfDef("Failed to fetch open orders for %s from bittrex; reason: '%s'\n", ba.Identifier(), err)
 	} else {
 		//OpenUUIDs, Fills := okane.LoadOrdersToMaps(OrderQuery)
 		for _, o := range orders {
@@ -594,7 +595,7 @@ func (ba *BittrexAccount) checkOrderLoop() {
 			} else {
 				err = Order.RecordOpenOrder()
 				log.ErrorIff(err, "failed to record open order: %s\n", Order.Identifier())
-				ba.User.Notices.SendIfDeff("%s", Order.FormatOrderOpenChat())
+				ba.User.Notices.SendfIfDef("%s", Order.FormatOrderOpenChat())
 			}
 		}
 		for uuid := range OrderState {
@@ -602,7 +603,7 @@ func (ba *BittrexAccount) checkOrderLoop() {
 				log.Printf("It is time to delete order '%s'; it is not open but is in o_order_open still.\n", uuid)
 				err = ba.Account.User.RemoveOpenOrder(uuid)
 				log.ErrorIff(err, "failed to remove open order %s\n", uuid)
-				ba.Account.User.Notices.SendIfDeff("%s", DbOpenOrders.ByUuid[uuid].FormatOrderVanished())
+				ba.Account.User.Notices.SendfIfDef("%s", DbOpenOrders.ByUuid[uuid].FormatOrderVanished())
 			}
 		}
 		log.Printf("Scanned %d open orders for '%s'\n", len(orders), ba.Identifier())
@@ -731,9 +732,9 @@ func BittrexUserHandler(Bittrex *BittrexAccount) {
 }
 
 func main() {
-	LoadConfigValues("/data/baytor/okane.ini")
+	LoadConfigValues("/data/config/okane.ini")
 	InitAndConnect()
-	Chaterr.SendIfDeff("Bittrex central process bootup.\n")
+	Chaterr.SendfIfDef("Bittrex central process bootup.\n")
 	NoApi := bittrex.New("", "")
 	NoApi.SetDebug(false)
 	go FetchMarketDefs(NoApi)

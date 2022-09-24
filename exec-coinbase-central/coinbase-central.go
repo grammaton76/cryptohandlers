@@ -94,7 +94,7 @@ func ToCoinbaseAccount(acct *okane.Account, Section string) *CoinbaseAccount {
 	passphrase := Config.GetStringOrDie(AuthSection+".passphrase", "ERROR: No coinbase passphrase found in ini.")
 	client := coinbasepro.NewClient()
 	client.UpdateConfig(&coinbasepro.ClientConfig{
-		BaseURL:    "https://api.pro.coinbase.com",
+		BaseURL:    "https://api.exchange.coinbase.com",
 		Key:        key,
 		Passphrase: passphrase,
 		Secret:     secret,
@@ -201,7 +201,7 @@ func checkOrderLoop() {
 				var cursor *coinbasepro.Cursor
 				switch Phase {
 				case "open":
-					cursor = cbclient.ListOrders()
+					cursor = cbclient.ListOrders(coinbasepro.ListOrdersParams{Status: "open"})
 					var Pages int
 					for cursor.HasMore {
 						Pages++
@@ -211,6 +211,7 @@ func checkOrderLoop() {
 							log.Printf("Failed pulling orders: %s!\n", err)
 							continue
 						}
+						log.Debugf("There are %d %s orders for %s\n", len(orders), Phase, AccountHandle.Identifier())
 						for _, o := range orders {
 							if o.ID != "" {
 								if OrderState[o.ID] == STATE_OPEN_DBONLY {
@@ -257,7 +258,10 @@ func checkOrderLoop() {
 							err = cursor.NextPage(&ledgers)
 							if err != nil {
 								log.ErrorIff(err, "failed fetching %s ledgers", Coin)
+								time.Sleep(time.Second / 2)
 								continue
+							} else {
+								time.Sleep(time.Second / 10)
 							}
 							for _, e := range ledgers {
 								if e.Type != "match" || e.Details.OrderID == "" {
@@ -281,8 +285,8 @@ func checkOrderLoop() {
 								AccountMarkets[e.Details.ProductID][e.Details.OrderID]++
 							}
 						}
-						log.Debugf("Scanning %-8s ledger for %s yielded %d records (%d new)\n",
-							cbsubacct.Currency, AccountHandle.Identifier(), Trades, Unrecorded)
+						log.Debugf("Scanning %s %-8s ledger for %s yielded %d records (%d new)\n",
+							Phase, cbsubacct.Currency, AccountHandle.Identifier(), Trades, Unrecorded)
 					}
 					log.Printf("Ledgers pulled; unclosed orders detected: %+v\n", AccountMarkets)
 					for ProductName, Unclosed := range AccountMarkets {
@@ -294,14 +298,16 @@ func checkOrderLoop() {
 							//log.Printf("Performing search for %s\n", Uuid)
 							Sentry.Checkin("Pulling historical order records on cycle %d phase %s - %s", Count, Phase, Uuid)
 							cursor := cbclient.ListFills(coinbasepro.ListFillsParams{
-								OrderID: Uuid, Pagination: coinbasepro.PaginationParams{Limit: 5}})
+								OrderID: Uuid, Pagination: coinbasepro.PaginationParams{Limit: 25}})
 							for cursor.HasMore {
 								var orders []coinbasepro.Order
 								err := cursor.NextPage(&orders)
 								if err != nil {
 									log.Errorf("Error scanning orders on bucket for phase %s on market %s: %s\n", Phase, ProductName, err)
-									time.Sleep(time.Second / 4)
+									time.Sleep(time.Second / 2)
 									continue
+								} else {
+									time.Sleep(time.Second / 10)
 								}
 								for _, v := range orders {
 									//log.Printf("Assigning uuid %s into record...\n", Uuid)
@@ -746,7 +752,7 @@ func (Acct *CoinbaseAccount) getCbBalance() []*okane.CoinBalance {
 		log.Printf("Result: %v\n", res)
 	} */
 	if err != nil {
-		log.Printf("Caw! ERROR: '%s' fetching '%s'\n", err, url)
+		log.Fatalf("Balance fetch fatal error '%s' fetching '%s'\n", err, url)
 		os.Exit(2)
 	}
 	//log.Printf("Body return: %v\n", Raw)

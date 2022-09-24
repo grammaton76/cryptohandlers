@@ -107,8 +107,8 @@ func LoadConfigValues(Ini string) {
 		Global.NoRateData = true
 	}
 
-	Config.LoadAnIni(Ini).OrDie()
-	Global.PidFile = Config.GetStringOrDefault("bittrex.ratelogpid", "/data/baytor/state/bittrex-central.pid", "Defaulting pid file")
+	Config.LoadAnIni(Ini).OrDie("Couldn't load ini file")
+	Global.PidFile = Config.GetStringOrDefault("bittrex.ratelogpid", "/data/statefiles/bittrex-central.pid", "Defaulting pid file")
 	shared.ExitIfPidActive(Global.PidFile)
 	Global.ChatSection = Config.GetStringOrDefault("bittrex.chathandle", "", "No chat channel defined; no notices will be sent!\n")
 	Global.LocalStorage = Config.GetStringOrDie("bittrex.localstorage", "")
@@ -123,6 +123,11 @@ func LoadConfigValues(Ini string) {
 	found, List := Config.GetString("okane.userlist")
 	if found {
 		Global.UserNames = strings.Split(List, ",")
+	}
+	if Global.ReadOnly == false {
+		TestFile := sjson.NewJson()
+		log.FatalIff(TestFile.TestWritable(Global.MarketRatesFile), "Cache write startup test: MarketRates")
+		log.FatalIff(TestFile.TestWritable(Global.MarketRatesUsFile), "Cache write starup test: MarketRatesUs")
 	}
 }
 
@@ -499,11 +504,9 @@ func (ba *BittrexAccount) BittrexOrderToOkane(o *bittrex.OrderV3) *okane.Order {
 	}
 	if !o.FillQuantity.IsZero() {
 	}
-	UsdRate := decimal.Zero
-	if MarketDef.LastRate == nil {
-		log.Errorf("MarketDef.LastRate is nil for '%s'!\n", MarketDef.Name())
-	} else {
-		UsdRate = MarketDef.LastRate.UsdRate
+	UsdTotal := decimal.NullDecimal{}
+	if MarketDef.LastRate != nil {
+		UsdTotal = decimal.NewNullDecimal(MarketDef.LastRate.UsdRate.Mul(o.FillQuantity))
 	}
 	Order := okane.Order{
 		Account:    ba.Account,
@@ -519,7 +522,7 @@ func (ba *BittrexAccount) BittrexOrderToOkane(o *bittrex.OrderV3) *okane.Order {
 		Created:    o.CreatedAt,
 		Closed:     o.ClosedAt,
 		TotalPrice: o.FillQuantity.Mul(o.Limit),
-		UsdTotal:   UsdRate,
+		UsdTotal:   UsdTotal,
 	}
 	Order.BaseCoin = Order.Base.Name()
 	Order.QuoteCoin = Order.Quote.Name()
@@ -732,7 +735,7 @@ func BittrexUserHandler(Bittrex *BittrexAccount) {
 }
 
 func main() {
-	LoadConfigValues("/data/config/okane.ini")
+	LoadConfigValues("/data/config/bittrex-central.ini")
 	InitAndConnect()
 	Chaterr.SendfIfDef("Bittrex central process bootup.\n")
 	NoApi := bittrex.New("", "")

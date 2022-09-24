@@ -1,0 +1,11 @@
+go 1.18
+
+use (
+    ../../g76golib/chatoutput/sc_dbtable
+    ../../g76golib/okane
+    ../../g76golib/sentry
+    ../../g76golib/shared
+    ../../g76golib/sjson
+    ../../g76golib/slogger
+	.
+)

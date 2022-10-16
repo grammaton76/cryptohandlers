@@ -571,7 +571,12 @@ func (ba *BittrexAccount) checkOrderLoop() {
 	if err != nil {
 		log.Errorf("Failed to fetch open orders for %s from bittrex; reason: '%s'\n", ba.Identifier(), err)
 		ba.User.Notices.SendfIfDef("Failed to fetch open orders for %s from bittrex; reason: '%s'\n", ba.Identifier(), err)
+		return
 	} else {
+		if len(orders) == 0 {
+			log.Printf("Empty open order list downloaded, but no error was presented either!\n")
+			return
+		}
 		//OpenUUIDs, Fills := okane.LoadOrdersToMaps(OrderQuery)
 		for _, o := range orders {
 			if OrderState[o.ID] == STATE_OPEN_DBONLY {

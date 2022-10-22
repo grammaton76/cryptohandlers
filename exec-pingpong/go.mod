@@ -4,7 +4,7 @@ go 1.18
 
 require (
 	github.com/grammaton76/g76golib/chatoutput/sc_dbtable v0.0.0-20220916085953-ece0f6bae3c3
-	github.com/grammaton76/g76golib/okane v0.0.0-20220916085953-ece0f6bae3c3
+	github.com/grammaton76/g76golib/okane v0.0.0-20221018082313-25daf94cb759
 	github.com/grammaton76/g76golib/shared v0.0.0-20220916085953-ece0f6bae3c3
 	github.com/grammaton76/g76golib/slogger v0.0.0-20220916085953-ece0f6bae3c3
 )

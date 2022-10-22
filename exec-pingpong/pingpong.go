@@ -126,7 +126,7 @@ func LoadConfigValues(Ini string) {
 	if Cli.Inifile != "" {
 		Ini = Cli.Inifile
 	}
-	Config.LoadAnIni(Ini).OrDie()
+	Config.LoadAnIni(Ini).OrDie("Couldn't load INI")
 	Global.PidFile = Config.GetStringOrDefault("pingpong.pidfile", "/data/baytor/state/pingpong.pid", "Defaulting pid file")
 	shared.ExitIfPidActive(Global.PidFile)
 	found, List := Config.GetString("okane.userlist")

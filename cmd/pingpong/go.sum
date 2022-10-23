@@ -36,8 +36,6 @@ github.com/google/uuid v1.1.1/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+
 github.com/gorilla/websocket v1.2.0/go.mod h1:E7qHFY5m1UJ88s3WnNqhKjPHQ0heANvMoAMk2YaljkQ=
 github.com/grammaton76/g76golib/chatoutput/sc_dbtable v0.0.0-20220916085953-ece0f6bae3c3 h1:vE+SziB6CVjN3pCdx1kIyYpAIBgpGnqvi4HQqOoFGi0=
 github.com/grammaton76/g76golib/chatoutput/sc_dbtable v0.0.0-20220916085953-ece0f6bae3c3/go.mod h1:RT8MhI8XI/Z8uQvzDS1opZ88UpF/44XTgsTmyp8HtzU=
-github.com/grammaton76/g76golib/okane v0.0.0-20220916085953-ece0f6bae3c3 h1:6faM38ZXL3WQtivZYd63FOUICHSzcmVHeIgm8f8NReU=
-github.com/grammaton76/g76golib/okane v0.0.0-20220916085953-ece0f6bae3c3/go.mod h1:4ZmZbom0jZj4eE71eJlkzyqB9mpCpfJ5tFcf/fSkWMc=
 github.com/grammaton76/g76golib/okane v0.0.0-20221018082313-25daf94cb759 h1:8D2xXjIHBa2+jEchRjAj9/xVZe+F1TXwnBak3ODQh5g=
 github.com/grammaton76/g76golib/okane v0.0.0-20221018082313-25daf94cb759/go.mod h1:3uBiSqlqxSIokxuet37wCD4fq4HAxzE3vX2WMFsbHw4=
 github.com/grammaton76/g76golib/shared v0.0.0-20220916085953-ece0f6bae3c3 h1:9qE+54ycNF+124tCKyP5pcVd6yJMT+QDQVVr4CYNbnw=

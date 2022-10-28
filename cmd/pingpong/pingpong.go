@@ -1,13 +1,5 @@
 package main
 
-/*
-
-To ensure profit, sells are always +1 sat baseline. At lower levels it does a lot for fees. Buys might not adjust anything?
-
-Listen via redis for pubsub events on orders completing or partially filling
-
-*/
-
 import (
 	"database/sql"
 	"flag"

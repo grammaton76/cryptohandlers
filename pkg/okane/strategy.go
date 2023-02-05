@@ -3,7 +3,7 @@ package okane
 import (
 	"database/sql"
 	"fmt"
-	"github.com/grammaton76/g76golib/sjson"
+	"github.com/grammaton76/g76golib/pkg/sjson"
 	"github.com/shopspring/decimal"
 	"time"
 )

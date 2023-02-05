@@ -8,9 +8,8 @@ import (
 	"github.com/grammaton76/g76golib/pkg/sentry"
 	"github.com/grammaton76/g76golib/pkg/shared"
 	"github.com/grammaton76/g76golib/pkg/sjson"
-	slogger "github.com/grammaton76/g76golib/pkg/slogger"
+	"github.com/grammaton76/g76golib/pkg/slogger"
 	"github.com/shopspring/decimal"
-	bittrex "github.com/toorop/go-bittrex"
 	"strings"
 	"time"
 )
@@ -55,7 +54,7 @@ var Global struct {
 	CheckSummaries        *shared.Stmt
 	ReadOnly              bool
 	UserNames             []string
-	Accounts              []*BittrexAccount
+	Accounts              []*SimexAccount
 	EventChannel          *okane.EventChannel
 	DiagCheckUser         string
 	NoRateData            bool
@@ -63,21 +62,23 @@ var Global struct {
 		Timeout time.Duration
 		Poll    time.Duration
 	}
+	MirrorExchange string
+	MirrorStart    time.Time
+	MirrorStop     time.Time
+	MirrorStep     time.Duration
 	//PullIntervalUsd       *shared.Stmt
 }
 
-var Exchange okane.Exchange = okane.ExchangeBittrex
+var Exchange okane.Exchange = okane.ExchangeSimulator
 
-type BittrexAccount struct {
+type SimexAccount struct {
 	*okane.Account
-	Handle  *bittrex.Bittrex
+	Handle  *SimexApiActor
 	Notices *shared.ChatTarget
 	Section string
 }
 
-var CoinLookup shared.LookupTable
-
-func LoadConfigValues(Ini ...string) {
+func LoadConfigValues(Ini string) {
 	_ = log.Init()
 	slogger.SetLogger(&log)
 	shared.SetLogger(&log)
@@ -101,23 +102,23 @@ func LoadConfigValues(Ini ...string) {
 	}
 	Global.ReadOnly = Cli.ReadOnly
 	if Cli.Inifile != "" {
-		Ini = []string{Cli.Inifile}
+		Ini = Cli.Inifile
 	}
 	if Global.DiagCheckUser != "" {
 		Global.NoRateData = true
 	}
 
-	Config.LoadAnIni(Ini...).OrDie("Couldn't load ini file")
-	Global.PidFile = Config.GetStringOrDefault("bittrex.ratelogpid", "/data/statefiles/bittrex-central.pid", "Defaulting pid file")
+	Config.LoadAnIni([]string{Ini}).OrDie("Couldn't load ini file")
+	Global.PidFile = Config.GetStringOrDefault("simex.ratelogpid", "/data/statefiles/simex-central.pid", "Defaulting pid file")
 	shared.ExitIfPidActive(Global.PidFile)
-	Global.ChatSection = Config.GetStringOrDefault("bittrex.chathandle", "", "No chat channel defined; no notices will be sent!\n")
-	Global.LocalStorage = Config.GetStringOrDie("bittrex.localstorage", "")
-	Global.MarketDataFile = Config.GetStringOrDefault("bittrex.marketdata", Global.LocalStorage+"/marketdata-bittrex.json", "")
-	Global.MarketRatesFile = Config.GetStringOrDefault("bittrex.marketrates", Global.LocalStorage+"/marketrates-bittrex.json", "")
-	Global.MarketIntervalsFile = Config.GetStringOrDefault("bittrex.marketintervals", Global.LocalStorage+"/marketintervals-bittrex.json", "")
-	Global.MarketRatesUsFile = Config.GetStringOrDefault("bittrex.usmarketrates", Global.LocalStorage+"/usmarketrates-bittrex.json", "")
-	Global.MarketIntervalsUsFile = Config.GetStringOrDefault("bittrex.usmarketintervals", Global.LocalStorage+"/usmarketintervals-bittrex.json", "")
-	Seconds := Config.GetIntOrDefault("bittrex.ordercheck_seconds", 60, "Defaulting to checking orders every 60 seconds.\n")
+	Global.ChatSection = Config.GetStringOrDefault("simex.chathandle", "", "No chat channel defined; no notices will be sent!\n")
+	Global.LocalStorage = Config.GetStringOrDie("simex.localstorage", "")
+	Global.MarketDataFile = Config.GetStringOrDefault("simex.marketdata", Global.LocalStorage+"/marketdata-simex.json", "")
+	Global.MarketRatesFile = Config.GetStringOrDefault("simex.marketrates", Global.LocalStorage+"/marketrates-simex.json", "")
+	Global.MarketIntervalsFile = Config.GetStringOrDefault("simex.marketintervals", Global.LocalStorage+"/marketintervals-simex.json", "")
+	Global.MarketRatesUsFile = Config.GetStringOrDefault("simex.usmarketrates", Global.LocalStorage+"/usmarketrates-simex.json", "")
+	Global.MarketIntervalsUsFile = Config.GetStringOrDefault("simex.usmarketintervals", Global.LocalStorage+"/usmarketintervals-simex.json", "")
+	Seconds := Config.GetIntOrDefault("simex.ordercheck_seconds", 60, "Defaulting to checking orders every 60 seconds.\n")
 	Global.Timing.Poll = time.Second * time.Duration(Seconds)
 
 	found, List := Config.GetString("okane.userlist")
@@ -129,6 +130,10 @@ func LoadConfigValues(Ini ...string) {
 		log.FatalIff(TestFile.TestWritable(Global.MarketRatesFile), "Cache write startup test: MarketRates")
 		log.FatalIff(TestFile.TestWritable(Global.MarketRatesUsFile), "Cache write starup test: MarketRatesUs")
 	}
+	Global.MirrorExchange = Config.GetStringOrDie("simex.trackexchange", "Must specify which exchange to use as base.\n")
+	Global.MirrorStart = Config.GetTimeOrDie("simex.mirrorstart", "Must specify what time to start the mirror at.\n")
+	Global.MirrorStop = Config.GetTimeOrDie("simex.mirrorstop", "Must specify what time to stop the mirror at.\n")
+	Global.MirrorStep = Config.GetDurationOrDie("simex.mirrortick", "Must specify how long a clock minute lasts.\n")
 }
 
 func InitAndConnect() {
@@ -136,31 +141,27 @@ func InitAndConnect() {
 	Global.Timing.Timeout = time.Minute * 2
 	Sentries = sentry.NewSentryTeam()
 	Sentries.TripwireFunc = func(st *sentry.Sentry) {
-		Global.ChatHandle.SendDefaultf("Bittrex-central rebooting due to failure on check %d of sentry %s (%s)\n",
+		Global.ChatHandle.SendDefaultf("Simex-central rebooting due to failure on check %d of sentry %s (%s)\n",
 			st.Counter(), st.Identifier(), st.Notes())
 	}
 	Sentries.DefaultTtl = Global.Timing.Timeout
 	Global.db = Config.ConnectDbKey("okane.centraldb").OrDie()
 	log.FatalIff(okane.DbInit(Global.db), "dbinit failed.\n")
-	CoinLookup = shared.NewLookup("coinlookup", Global.db)
 	Global.EventChannel = okane.NewEventChannel()
 	if Global.ChatSection != "" {
 		Global.ChatHandle = Config.NewChatHandle(Global.ChatSection).OrDie("failed to define chat handle")
 		Chaterr = Global.ChatHandle.OutputChannel
 	}
-	Global.PullInterval = Global.db.PrepareOrDie(
-		"select marketid,max(last),min(last),max(lastusd),min(lastusd) from marketlast where exchangeid=1 and timeat>$1 group by marketid;")
-	Global.PullSummaryInterval = Global.db.PrepareOrDie(
-		"select marketid,max(high),min(low),max(highusd),min(lowusd) from marketlast_hour where exchangeid=1 and timeat>$1 group by marketid;")
-	Global.CheckSummaries = Global.db.PrepareOrDie(
-		"select timeat,exchangeid from marketlast_hour where exchangeid=1 and timeat>$1;")
+	Global.PullInterval = Global.db.PrepareOrDie("select marketid,max(last),min(last),max(lastusd),min(lastusd) from marketlast where exchangeid=1 and timeat>$1 group by marketid;")
+	Global.PullSummaryInterval = Global.db.PrepareOrDie("select marketid,max(high),min(low),max(highusd),min(lowusd) from marketlast_hour where exchangeid=1 and timeat>$1 group by marketid;")
+	Global.CheckSummaries = Global.db.PrepareOrDie("select timeat,exchangeid from marketlast_hour where exchangeid=1 and timeat>$1;")
 	// Top level section lists out the sections where the keys are defined.
 	for _, Section := range Global.UserNames {
 		Username := Config.GetStringOrDie(Section+".username", "Username is required")
 		log.Printf("Init'ing user '%s'\n", Section)
-		found, sList := Config.GetString(Section + ".bittrex")
+		found, sList := Config.GetString(Section + ".simex")
 		if !found {
-			log.Printf("No bittrex handles for user '%s'\n", Section)
+			log.Printf("No simex handles for user '%s'\n", Section)
 			continue
 		}
 		UserDb := Config.ConnectDbKey(Section + ".database").OrDie()
@@ -184,9 +185,9 @@ func InitAndConnect() {
 		// Underneath the user are accounts, not users.
 		for _, UserSection := range Lists {
 			log.Printf("Scanning accounts for section '%s'; now doing '%s'\n", Section, UserSection)
-			Accounts := User.LoadAccountsForExchange(okane.Exchanges.ByName["bittrex"])
+			Accounts := User.LoadAccountsForExchange(okane.Exchanges.ByName["simex"])
 			for _, Account := range Accounts {
-				bAccount := ToBittrexAccount(Account, Section)
+				bAccount := ToSimexAccount(Account, Section)
 				Global.Accounts = append(Global.Accounts, bAccount)
 			}
 		}
@@ -194,112 +195,27 @@ func InitAndConnect() {
 	Global.EventChannel.Connect()
 }
 
-func FetchMarketDefs(api *bittrex.Bittrex) {
-	NewMarkets := okane.NewMarketDef()
-	OldMarkets := okane.NewMarketDef()
-	Sentry := Sentries.NewSentry("FetchMarketDefs()").SetTTL(time.Duration(5) * time.Minute)
-	var Cycles, LastSuccess int
-	for true {
-		Cycles++
-		Sentry.Checkin("market fetch, cycle %d", Cycles)
-		result, err := api.GetMarkets()
-		if err != nil {
-			if LastSuccess < (Cycles - 3) {
-				log.FatalIff(err, "Fatal error on market grab.\n")
-			}
-			log.Errorf("Failed market fetch %d (last success: %d): %s\n", Cycles, LastSuccess, err)
-			time.Sleep(time.Minute)
-			continue
-		}
-		for _, v := range result {
-			Name := v.Symbol
-			Market := okane.MarketDef{
-				BaseCoin:     okane.CoinLookup.ByNameOrAdd(v.BaseCurrencySymbol),
-				QuoteCoin:    okane.CoinLookup.ByNameOrAdd(v.QuoteCurrencySymbol),
-				Status:       v.Status,
-				Created:      v.CreatedAt,
-				UsProhibited: false,
-				Notice:       v.Notice,
-				Precision:    decimal.NewFromInt(1).Shift(-v.Precision),
-			}
-			if OldMarkets[Name] != nil {
-				Market.LastRate = OldMarkets[Name].LastRate
-			}
-			Market.SetSymbol(Name)
-			for _, v := range v.ProhibitedIn {
-				if v == "US" {
-					Market.UsProhibited = true
-				}
-			}
-			NewMarkets[Name] = &Market
-		}
-		Exchange.Markets = NewMarkets
-		Global.MarketDataCycle++
-		LastSuccess = Cycles
-		if NewMarkets.Equals(&OldMarkets) {
-			log.Printf("Market data in '%s' has had no changes\n", Global.MarketDataFile)
-		} else {
-			err = NewMarkets.UpdateOmarketsTable(okane.EXCHANGE_BITTREX)
-			log.FatalIff(err, "failed to update omarket table in database")
-
-			File := sjson.NewJson()
-			for _, market := range NewMarkets {
-				Name := market.Name()
-				Rec := sjson.NewJson()
-				Def := sjson.NewJson()
-				if market.LastRate != nil {
-					Rec["Last"] = market.LastRate.Last.StringFixed(8)
-					Rec["Bid"] = market.LastRate.Bid.StringFixed(8)
-					Rec["Ask"] = market.LastRate.Ask.StringFixed(8)
-					Rec["Volume"] = market.LastRate.Volume.Decimal.StringFixed(8)
-					Rec["UsdRate"] = market.LastRate.UsdRate.StringFixed(8)
-				}
-				Def["Status"] = market.Status
-				if market.Exchange != nil {
-					Def["Exchange"] = market.Exchange.Name
-				}
-				Def["Precision"] = market.Precision.String()
-				Def["MarketId"] = market.LookupItem.Id()
-				Def["UsProhibited"] = market.UsProhibited
-				Def["BaseCoin"] = market.BaseCoin.Id()
-				Def["QuoteCoin"] = market.QuoteCoin.Id()
-				Def["BaseCoinName"] = market.BaseCoin.Name()
-				Def["QuoteCoinName"] = market.QuoteCoin.Name()
-				Def["Created"] = market.Created.String()
-				Def["Notice"] = market.Notice
-				Rec["MarketDef"] = Def
-				File[Name] = Def
-			}
-			log.ErrorIff(File.WriteToFile(Global.MarketDataFile), "writing out json file '%s'", Global.MarketDataFile)
-			log.Printf("Writing market data to '%s' due to changes\n", Global.MarketDataFile)
-		}
-		Sentry.Checkin("post-fetch sleep, waiting for cycle %d", Cycles+1)
-		time.Sleep(time.Minute)
-		OldMarkets = NewMarkets
-	}
-}
-
-func FetchMarketTickers(api *bittrex.Bittrex) {
+func FetchMarketTickers(api *SimexApiActor) {
 	for true {
 		Summaries, err := api.GetTicker("")
 		log.FatalIff(err, "Failed to download market summaries.\n")
 		MarketRates := make(okane.MarketRatesType)
 		UpdateTime := time.Now()
-		for _, v := range Summaries {
-			MarketName := okane.MarketLookup.ByNameOrAdd(v.Symbol).Name()
-			_, Market := Exchange.Markets.ByName(MarketName)
-			if Market == nil {
-				log.Printf("Looked for %s; it wasn't there.\n", MarketName)
-				continue
+		for _, k := range Summaries.List() {
+			v := Summaries.Select(k)
+			MarketName, nerr := v.Name()
+			if nerr != nil {
+				log.Printf("Failure examining ticker summaries: %s\n", nerr)
 			}
+			Market := v.MarketDef
 			Quote := okane.MarketQuote{
-				MarketDef:  Market,
-				Last:       v.LastTradeRate,
-				Bid:        v.BidRate,
-				Ask:        v.AskRate,
+				MarketDef:  v.MarketDef,
+				Last:       v.Last,
+				Bid:        v.Bid,
+				Ask:        v.Ask,
 				LastUpdate: UpdateTime,
 			}
-			MarketRates[v.Symbol] = &Quote
+			MarketRates[MarketName] = &Quote
 			Market.LastRate = &Quote
 		}
 		MarketRates.SetFiat(nil)
@@ -349,7 +265,7 @@ func FetchMarketTickers(api *bittrex.Bittrex) {
 		}
 		log.ErrorIff(File.WriteToFile(Global.MarketRatesFile), "writing out json file '%s'", Global.MarketRatesFile)
 		log.ErrorIff(FileUs.WriteToFile(Global.MarketRatesUsFile), "writing out json file '%s'", Global.MarketRatesUsFile)
-		MarketRates.WriteMarketLast(Global.db, okane.Exchanges.ById[okane.EXCHANGE_BITTREX])
+		MarketRates.WriteMarketLast(Global.db, okane.Exchanges.ById[okane.EXCHANGE_SIMEX])
 		log.Printf("Writing market rates to '%s' due to changes\n", Global.MarketRatesFile)
 		time.Sleep(time.Minute)
 	}
@@ -472,175 +388,95 @@ func FetchMarketIntervals() {
 	}
 }
 
-func ToBittrexAccount(acct *okane.Account, Section string) *BittrexAccount {
-	AuthSection := Config.GetStringOrDie(Section+".bittrex", "Must have a list of bittrex accounts (even if empty)")
-	Bob := &BittrexAccount{
+func ToSimexAccount(acct *okane.Account, Section string) *SimexAccount {
+	//AuthSection := Config.GetStringOrDie(Section+".simex", "Must have a list of simex accounts (even if empty)")
+	//TODO: Support multiple simex's based upon other exchanges
+	Bob := &SimexAccount{
 		Account: acct,
 		Section: Section,
 	}
-	Bob.Exchange = okane.Exchanges.ById[okane.EXCHANGE_BITTREX]
-	Key := Config.GetStringOrDie(AuthSection+".key", "Key is required.\n")
-	Secret := Config.GetStringOrDie(AuthSection+".secret", "Secret is required.\n")
-	Bob.Handle = bittrex.New(Key, Secret)
+	Bob.Exchange = okane.Exchanges.ById[okane.EXCHANGE_SIMEX]
 	return Bob
 }
 
-func (ba *BittrexAccount) UpdateBalances() {
-	Data, err := ba.Handle.GetBalances()
-	log.FatalIff(err, "Failed to get balances on %s\n", ba.Identifier())
-	Minimum, _ := decimal.NewFromString("0.00000001")
-	Bal := ba.NewBalanceSnapshot()
-	for _, v := range Data {
-		Balance := v.Total
-		Available := v.Available
-		Hold := Balance.Sub(Available)
-		if Balance.LessThanOrEqual(Minimum) {
-			continue
-		}
-		CoinId := CoinLookup.LabelToId(v.CurrencySymbol, true).Id()
-		Bal.Add(CoinId, Balance.Round(8), Available.Round(8), Hold.Round(8))
-	}
-	log.ErrorIff(Bal.UpdateDb(), "failed to write balance snapshot")
-}
-
-func (ba *BittrexAccount) BittrexOrderToOkane(o *bittrex.OrderV3) *okane.Order {
-	found, MarketDef := ba.Exchange.Markets.ByName(o.MarketSymbol)
-	if !found {
-		log.Printf("Failed to look up market '%s' when resolving order.\n", o.MarketSymbol)
-		return nil
-	}
-	if !o.FillQuantity.IsZero() {
-	}
-	UsdTotal := decimal.NullDecimal{}
-	if MarketDef.LastRate != nil {
-		UsdTotal = decimal.NewNullDecimal(MarketDef.LastRate.UsdRate.Mul(o.FillQuantity))
-	}
-	Order := okane.Order{
-		Account:    ba.Account,
-		Uuid:       o.ID,
-		Type:       okane.OrderTranslationMapBittrex[o.Type][o.Direction],
-		Market:     MarketDef,
-		Base:       MarketDef.BaseCoin,
-		Quote:      MarketDef.QuoteCoin,
-		Bidlimit:   o.Limit,
-		Quantity:   o.Quantity,
-		Filled:     o.FillQuantity,
-		Fee:        o.Commission,
-		Created:    o.CreatedAt,
-		Closed:     o.ClosedAt,
-		TotalPrice: o.FillQuantity.Mul(o.Limit),
-		UsdTotal:   UsdTotal,
-	}
-	Order.BaseCoin = Order.Base.Name()
-	Order.QuoteCoin = Order.Quote.Name()
-	if Order.Type == "" {
-		log.Errorf("Failed to map order '%+v' to a string.\n", o)
-	}
-	return &Order
-}
-
-func (ba *BittrexAccount) checkOrderLoop() {
+func (sa *SimexAccount) checkOrderLoop() {
 	const STATE_OPEN_DBONLY int = 1    // This is NOT on the open order list but db has it. Notify vanished.
 	const STATE_OPEN_NODB int = 2      // This IS open but the db hasn't stored it yet. Notify new.
 	const STATE_OPEN_CONFIRMED int = 3 // It was in DB and confirmed still open.
 	const STATE_DBOPEN_CLOSED int = 4  // This WAS open in db and we just found it in closed. Notify closed.
 	OrderState := make(map[string]int)
-	DbOpenOrders, err := ba.Account.GetOpenOrders()
-	log.ErrorIff(err, "failed to get open orders from db for %s\n", ba.Identifier())
+	DbOpenOrders, err := sa.Account.GetOpenOrders()
+	log.ErrorIff(err, "failed to get open orders from db for %s\n", sa.Identifier())
 	for k := range DbOpenOrders.ByUuid {
 		OrderState[k] = STATE_OPEN_DBONLY
 	}
-	orders, err := ba.Handle.GetClosedOrders("all")
+	orders, err := sa.Handle.GetClosedOrders()
 	if err != nil {
-		log.Errorf("Failed to fetch closed orders for %s from bittrex; reason: '%s'\n", ba.Identifier(), err)
-		ba.User.Notices.SendfIfDef("Failed to fetch closed orders for %s from bittrex; reason: '%s'\n", ba.Identifier(), err)
+		log.Errorf("Failed to fetch closed orders for %s from simex; reason: '%s'\n", sa.Identifier(), err)
+		sa.User.Notices.SendfIfDef("Failed to fetch closed orders for %s from simex; reason: '%s'\n", sa.Identifier(), err)
 	} else {
-		log.Printf("Scanned %d closed orders for '%s'\n", len(orders), ba.Identifier())
-		for _, o := range orders {
+		log.Printf("Scanned %d closed orders for '%s'\n", len(orders.Orders), sa.Identifier())
+		for _, o := range orders.Orders {
 			//log.Printf("It seems that order id '%s' is NOT present in closed orders.\n", o.ID)
-			if okane.OrderTranslationMapBittrex[o.Type][o.Direction] == "" {
-				log.Printf("ERROR: Order type '%s', side '%s' has no translation.\n", o.Type, o.Direction)
-				continue
-			}
-			if DbOpenOrders.ByUuid[o.ID] != nil {
-				OrderState[o.ID] = STATE_DBOPEN_CLOSED
-				Order := ba.BittrexOrderToOkane(&o)
-				if Order != nil {
-					err = Order.RecordClosedOrder()
-					log.ErrorIff(err, "Error closing order %s", Order.Identifier())
-					ba.User.Notices.SendfIfDef("%s", Order.FormatOrderClosedChat())
+			if DbOpenOrders.ByUuid[o.Uuid] != nil {
+				OrderState[o.Uuid] = STATE_DBOPEN_CLOSED
+				if o != nil {
+					err = o.RecordClosedOrder()
+					log.ErrorIff(err, "Error closing order %s", o.Identifier())
+					sa.User.Notices.SendfIfDef("%s", o.FormatOrderClosedChat())
 				}
 			}
 			//		log.Printf("Downloaded: '%+v'\n", Order)
 		}
 	}
-	orders, err = ba.Handle.GetOpenOrders("all")
+	orders, err = sa.Handle.GetOpenOrders()
 	if err != nil {
-		log.Errorf("Failed to fetch open orders for %s from bittrex; reason: '%s'\n", ba.Identifier(), err)
-		ba.User.Notices.SendfIfDef("Failed to fetch open orders for %s from bittrex; reason: '%s'\n", ba.Identifier(), err)
+		log.Errorf("Failed to fetch open orders for %s from simex; reason: '%s'\n", sa.Identifier(), err)
+		sa.User.Notices.SendfIfDef("Failed to fetch open orders for %s from simex; reason: '%s'\n", sa.Identifier(), err)
 		return
 	} else {
-		if len(orders) == 0 {
+		if len(orders.Orders) == 0 {
 			log.Printf("Empty open order list downloaded, but no error was presented either!\n")
 			return
 		}
 		//OpenUUIDs, Fills := okane.LoadOrdersToMaps(OrderQuery)
-		for _, o := range orders {
-			if OrderState[o.ID] == STATE_OPEN_DBONLY {
-				OrderState[o.ID] = STATE_OPEN_CONFIRMED
+		for _, o := range orders.Orders {
+			if OrderState[o.Uuid] == STATE_OPEN_DBONLY {
+				OrderState[o.Uuid] = STATE_OPEN_CONFIRMED
 			} else {
-				OrderState[o.ID] = STATE_OPEN_NODB
+				OrderState[o.Uuid] = STATE_OPEN_NODB
 			}
 			//log.Printf("It seems that order id '%s' is NOT present in open orders.\n", o.ID)
-			if okane.OrderTranslationMapBittrex[o.Type][o.Direction] == "" {
-				log.Printf("ERROR: Order type '%s', side '%s' has no translation.\n", o.Type, o.Direction)
-				continue
-			}
-			Order := ba.BittrexOrderToOkane(&o)
 			//log.Printf("UUID '%s' is record id %d\n", Order.Uuid, UUIDs[Order.Uuid])
-			if DbOpenOrders.ByUuid[Order.Uuid] != nil {
-				dbOrder := DbOpenOrders.ByUuid[Order.Uuid]
-				log.Debugf("Confirmed id '%s' is still present in open orders.\n", o.ID)
-				if !dbOrder.Filled.Equal(Order.Filled) {
+			if DbOpenOrders.ByUuid[o.Uuid] != nil {
+				dbOrder := DbOpenOrders.ByUuid[o.Uuid]
+				log.Debugf("Confirmed id '%s' is still present in open orders.\n", o.Uuid)
+				if !dbOrder.Filled.Equal(o.Filled) {
 					log.Debugf("Partial fill since the last update of o_order_open!\n")
-					ba.OrderUpdatePartialFill(Order)
-					dbOrder.Filled = Order.Filled
-					log.ErrorIff(ba.Publish(okane.EV_ORDER_UPDATE, Order), "error recording open order for bittrex")
+					sa.OrderUpdatePartialFill(o)
+					dbOrder.Filled = o.Filled
+					log.ErrorIff(sa.Publish(okane.EV_ORDER_UPDATE, o), "error recording open order for simex")
 				}
 			} else {
-				err = Order.RecordOpenOrder()
-				log.ErrorIff(err, "failed to record open order: %s\n", Order.Identifier())
-				ba.User.Notices.SendfIfDef("%s", Order.FormatOrderOpenChat())
+				err = o.RecordOpenOrder()
+				log.ErrorIff(err, "failed to record open order: %s\n", o.Identifier())
+				sa.User.Notices.SendfIfDef("%s", o.FormatOrderOpenChat())
 			}
 		}
 		for uuid := range OrderState {
 			if OrderState[uuid] == STATE_OPEN_DBONLY {
 				log.Printf("It is time to delete order '%s'; it is not open but is in o_order_open still.\n", uuid)
-				err = ba.Account.User.RemoveOpenOrder(uuid)
+				err = sa.Account.User.RemoveOpenOrder(uuid)
 				log.ErrorIff(err, "failed to remove open order %s\n", uuid)
-				ba.Account.User.Notices.SendfIfDef("%s", DbOpenOrders.ByUuid[uuid].FormatOrderVanished())
+				sa.Account.User.Notices.SendfIfDef("%s", DbOpenOrders.ByUuid[uuid].FormatOrderVanished())
 			}
 		}
-		log.Printf("Scanned %d open orders for '%s'\n", len(orders), ba.Identifier())
+		log.Printf("Scanned %d open orders for '%s'\n", len(orders.Orders), sa.Identifier())
 	}
 }
 
-func (ba *BittrexAccount) PlaceOrder(o *okane.ActionRequest) error {
+func (ba *SimexAccount) PlaceOrder(o *okane.ActionRequest) error {
 	//uuid, err := ba.Handle.BuyLimit(o.Market.Name(), decimal.NewFromFloat(o.Qty), decimal.NewFromFloat(o.Bidlimit))
-	var Dir bittrex.OrderDirection
-	var Type bittrex.OrderType
-	switch o.Command {
-	case "CANCEL":
-	case "LIMIT_BUY":
-		Dir = bittrex.BUY
-		Type = bittrex.LIMIT
-	case "LIMIT_SELL":
-		Dir = bittrex.SELL
-		Type = bittrex.LIMIT
-	default:
-		return fmt.Errorf("Order request %s had unknown action type '%s'\n",
-			o.Identifier(), o.Command)
-	}
 	switch o.Command {
 	case "CANCEL":
 		log.Printf("Attempting to cancel uuid '%s'\n", o.Uuid)
@@ -658,25 +494,16 @@ func (ba *BittrexAccount) PlaceOrder(o *okane.ActionRequest) error {
 		Chaterr.Sendf("Cancellation order '%s' successful.\n", o.Identifier())
 		return nil
 	}
-	log.Printf("Placing order request %d: '%s %s' on %s for %.08f at %.08f\n",
-		o.Id, Type, Dir, o.Market.Name(), o.Qty, o.Bidlimit)
-	O := bittrex.CreateOrderParams{
-		MarketSymbol: o.Market.Name(),
-		Direction:    Dir,
-		Type:         Type,
-		Quantity:     decimal.NewFromFloat(o.Qty),
-		TimeInForce:  "GOOD_TIL_CANCELLED",
-		Limit:        o.Bidlimit,
-		UseAwards:    "false",
-	}
-	res, err := ba.Handle.CreateOrder(O)
+	log.Printf("Placing order request %d: '%s' on %s for %.08f at %.08f\n",
+		o.Id, o.Command, o.Market.Name(), o.Qty, o.Bidlimit)
+	res, err := ba.Handle.PlaceOrder(o)
 	if err != nil {
 		_, errdb := ba.Account.SetRequest(o, "PLACING", "REJECTED")
 		log.ErrorIff(errdb, "Order request %s: failed to record rejection because", o.Identifier())
 		return Chaterr.LogErrorf("Placement error on order %s: %s\n",
 			o.Identifier(), err)
 	}
-	o.Uuid = res.ID
+	o.Uuid = res.Uuid
 	log.Printf("Result: %+v\n", res)
 	err = o.MarkAsHandled("PLACED")
 	log.ErrorIff(err, "Order request %s: successful order placement",
@@ -684,75 +511,76 @@ func (ba *BittrexAccount) PlaceOrder(o *okane.ActionRequest) error {
 	return nil
 }
 
-func (ba *BittrexAccount) ProcessRequestedOrders() {
+func (sa *SimexAccount) ProcessRequestedOrders() {
 	var Cycles int
 	for true {
 		time.Sleep(time.Duration(5) * time.Second)
 		Cycles++
 		log.Printf("Order request cycle %d\n", Cycles)
-		requests, err := ba.GetOpenOrderRequests()
+		requests, err := sa.GetOpenOrderRequests()
 		if err != nil {
 			log.Printf("Account %s: Failed to fetch pending order requests: %s.\n",
-				ba.Identifier(), err)
+				sa.Identifier(), err)
 			return
 		}
 		var taken bool
 		for _, Order := range requests {
-			taken, err = ba.Account.SetRequest(Order, "REQUESTED", "PLACING")
+			taken, err = sa.Account.SetRequest(Order, "REQUESTED", "PLACING")
 			if err != nil {
 				log.Printf("Account %s error taking order request: %s\n",
-					ba.Identifier(), err)
+					sa.Identifier(), err)
 				continue
 			}
 			if !taken {
-				log.Printf("Account %s: Wasn't able to take order_request %d; may have lost election.\n", ba.Identifier(), Order.Id)
+				log.Printf("Account %s: Wasn't able to take order_request %d; may have lost election.\n", sa.Identifier(), Order.Id)
 				continue
 			}
-			err = ba.PlaceOrder(Order)
+			err = sa.PlaceOrder(Order)
 			if err != nil {
 				log.Printf("Account %s error processing order request %d: %s\n",
-					ba.Identifier(), Order.Id, err)
-				taken, err = ba.Account.SetRequest(Order, "PLACING", "REJECTED")
+					sa.Identifier(), Order.Id, err)
+				taken, err = sa.Account.SetRequest(Order, "PLACING", "REJECTED")
 				if err != nil {
 					log.Printf("Account %s error marking order request %d rejected: %s\n",
-						ba.Identifier(), Order.Id, err)
+						sa.Identifier(), Order.Id, err)
 					continue
 				}
 			} else {
 				log.Printf("Account %s received uuid '%s' back from orderrequest %d\n",
-					ba.Identifier(), Order.Uuid, Order.Id)
-				err = ba.Account.RecordStratOrder(Order)
-				log.ErrorIff(err, "Account %s to record strat order", ba.Identifier())
+					sa.Identifier(), Order.Uuid, Order.Id)
+				err = sa.Account.RecordStratOrder(Order)
+				log.ErrorIff(err, "Account %s to record strat order", sa.Identifier())
 			}
 		}
 	}
 }
 
-func BittrexUserHandler(Bittrex *BittrexAccount) {
-	Id := fmt.Sprintf("BittrexUserHandler(%s)", Bittrex.Identifier())
+func SimexUserHandler(Simex *SimexAccount) {
+	Id := fmt.Sprintf("SimexUserHandler(%s)", Simex.Identifier())
 	Sentry := Sentries.NewSentry(Id)
-	log.Printf("Init for user '%s'\n", Bittrex.Identifier())
-	Bittrex.Account.User.Events = Global.EventChannel
-	go Bittrex.ProcessRequestedOrders()
+	log.Printf("Init for user '%s'\n", Simex.Identifier())
+	Simex.Account.User.Events = Global.EventChannel
+	go Simex.ProcessRequestedOrders()
 	for true {
-		log.Debugf("Scanning orders for '%s'\n", Bittrex.Identifier())
+		log.Debugf("Scanning orders for '%s'\n", Simex.Identifier())
 		Sentry.Checkin("checkOrderLoop()")
-		Bittrex.checkOrderLoop()
-		Sentry.Checkin("UpdateBalances()")
-		Bittrex.UpdateBalances()
+		Simex.checkOrderLoop()
 		Sentry.Checkin("ProcessRequestedOrders()")
 		Sentry.Checkin("Time sleep waiting for next cycle")
 		time.Sleep(Global.Timing.Poll)
 	}
 }
 
+func FetchMarketDefs() {
+}
+
 func main() {
-	LoadConfigValues("/data/config/bittrex-central.ini", "/data/config/okane.ini")
+	LoadConfigValues("/data/config/simex-central.ini")
 	InitAndConnect()
-	Chaterr.SendfIfDef("Bittrex central process bootup.\n")
-	NoApi := bittrex.New("", "")
-	NoApi.SetDebug(false)
-	go FetchMarketDefs(NoApi)
+	Chaterr.SendfIfDef("Simex central process bootup.\n")
+	var NoApi *SimexApiActor
+	//NoApi.SetDebug(false)
+	FetchMarketDefs()
 	for Global.MarketDataCycle == 0 {
 		time.Sleep(time.Second)
 	}
@@ -767,12 +595,12 @@ func main() {
 	for _, User := range Global.Accounts {
 		if Global.DiagCheckUser != "" {
 			if User.Section == Global.DiagCheckUser {
-				BittrexUserHandler(User)
+				SimexUserHandler(User)
 			} else {
 				log.Debugf("Skipping spawn of account thread on user '%s'\n", User.Identifier())
 			}
 		} else {
-			go BittrexUserHandler(User)
+			go SimexUserHandler(User)
 		}
 	}
 	for true {

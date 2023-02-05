@@ -3,8 +3,8 @@ package okane
 import (
 	"database/sql"
 	"fmt"
-	"github.com/grammaton76/g76golib/shared"
-	"github.com/grammaton76/g76golib/slogger"
+	"github.com/grammaton76/g76golib/pkg/shared"
+	"github.com/grammaton76/g76golib/pkg/slogger"
 	"github.com/shopspring/decimal"
 	"sync"
 	"time"
@@ -235,7 +235,7 @@ var OrderTranslationMapBittrex = map[string]map[string]string{
 const (
 	EXCHANGE_BITTREX  int = 1
 	EXCHANGE_BINANCE  int = 2
-	EXCHANGE_SIM      int = 3
+	EXCHANGE_SIMEX    int = 3
 	EXCHANGE_COINBASE int = 4
 	EXCHANGE_KRAKEN   int = 5
 )
@@ -343,6 +343,21 @@ func (o *Order) Identifier() string {
 		Unique = fmt.Sprintf("%s(%s)", Unique, o.Label)
 	}
 	return fmt.Sprintf("%s:%s:%s\n", Account, Market, Unique)
+}
+
+func (md MarketRatesType) Select(k string) *MarketQuote {
+	if md[k] != nil {
+		return md[k]
+	}
+	return nil
+}
+
+func (md MarketRatesType) List() []string {
+	var Keys []string
+	for k := range md {
+		Keys = append(Keys, k)
+	}
+	return Keys
 }
 
 func (md MarketRatesType) SetFiat(fm *FiatMap) {
@@ -519,7 +534,7 @@ var ExchangeBinance = Exchange{
 	Name: "binance",
 }
 var ExchangeSimulator = Exchange{
-	Id:   EXCHANGE_SIM,
+	Id:   EXCHANGE_SIMEX,
 	Name: "simulator",
 }
 var ExchangeCoinbase = Exchange{
@@ -562,6 +577,16 @@ func NewOrder(account *Account) *Order {
 	var Order Order
 	Order.Account = account
 	return &Order
+}
+
+func (mq *MarketQuote) Name() (string, error) {
+	if mq == nil {
+		return "", fmt.Errorf("Attempt to reference name from nil marketquote pointer")
+	}
+	if mq.MarketDef == nil {
+		return "", fmt.Errorf("Non-nil marketquote has nil marketdef")
+	}
+	return mq.MarketDef.Name(), nil
 }
 
 func (md *MarketDef) GetLastRateDb() *MarketQuote {
@@ -888,6 +913,17 @@ func (a *Account) NewBalanceSnapshot() *BalanceSnapshot {
 	return Ret
 }
 
+func (a *Account) GetBalance() *BalanceSnapshot {
+	log.Printf("Reading balances of %s from database.\n",
+		a.Identifier())
+	Ret := &BalanceSnapshot{
+		account:   a,
+		coinState: make(map[int]*BalState),
+	}
+	log.Fatalf("Not implemented!\n")
+	return Ret
+}
+
 func (bs *BalanceSnapshot) UpdateDb() error {
 	log.Printf("Writing balances of %d coins to database.\n",
 		len(bs.coinState))
@@ -900,6 +936,17 @@ func (bs *BalanceSnapshot) UpdateDb() error {
 		err = bs.account.BalanceSnapshotInsert(Tx, v.CoinId, v.Balance, v.Available, v.Hold)
 	}
 	return Tx.Commit()
+}
+
+func (bs *BalanceSnapshot) Balances() []BalState {
+	if bs == nil {
+		return nil
+	}
+	var ret []BalState
+	for _, v := range bs.coinState {
+		ret = append(ret, *v)
+	}
+	return ret
 }
 
 func (bs *BalanceSnapshot) Add(Coinid int, Balance decimal.Decimal, Available decimal.Decimal, Hold decimal.Decimal) *BalanceSnapshot {
@@ -960,9 +1007,9 @@ func (u *User) DbInit(Db *shared.DbHandle) {
 	u.rQ.GetUserStrats = shared.PrepareOrDie(Db,
 		`SELECT id, exchangeid, name, market, active, suspended, stratdata FROM stratdata;`)
 	u.rQ.GetLastStratCloses = shared.PrepareOrDie(Db,
-		"select stratowner,max(closed) from stratorders where closed is not null group by stratowner;")
+		"select stratowner,max(closed) from ostratorders where closed is not null group by stratowner;")
 	u.wQ.InsertStratOrder = shared.PrepareOrDie(Db,
-		`INSERT INTO stratorders (credid, uuid, stratowner, market, type, quantity, price, active) VALUES ($1, $2, $3, $4, $5, $6, $7, $8);`)
+		`INSERT INTO ostratorders (credid, uuid, stratowner, market, type, quantity, price, active) VALUES ($1, $2, $3, $4, $5, $6, $7, $8);`)
 	u.rQ.GetOpenRequests = shared.PrepareOrDie(Db,
 		`SELECT id,command,uuid,marketid,market,quantity,bidlimit,stratid,label,requested,status FROM o_order_request WHERE credid=$1 AND processed IS NULL AND status = 'REQUESTED';`)
 	u.rQ.GetRequest = shared.PrepareOrDie(Db,

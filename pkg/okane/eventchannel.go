@@ -3,7 +3,7 @@ package okane
 import (
 	"context"
 	"github.com/gomodule/redigo/redis"
-	"github.com/grammaton76/g76golib/sjson"
+	"github.com/grammaton76/g76golib/pkg/sjson"
 	"github.com/shopspring/decimal"
 	"reflect"
 	"time"
